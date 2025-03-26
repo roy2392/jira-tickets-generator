@@ -1,0 +1,49 @@
+name: Jira Ticket Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      num_sprints:
+        description: 'Number of sprints to create'
+        required: false
+        default: '2'
+        type: string
+      tickets_per_sprint:
+        description: 'Maximum number of tickets per sprint'
+        required: false
+        default: '5'
+        type: string
+
+jobs:
+  generate-tickets:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v2
+    
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Create .env file
+      run: |
+        echo "JIRA_SERVER=${{ secrets.JIRA_SERVER }}" > .env
+        echo "JIRA_EMAIL=${{ secrets.JIRA_EMAIL }}" >> .env
+        echo "JIRA_API_TOKEN=${{ secrets.JIRA_API_TOKEN }}" >> .env
+        echo "JIRA_PROJECT_KEY=${{ secrets.JIRA_PROJECT_KEY }}" >> .env
+        echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" >> .env
+        
+    - name: Run ticket generator
+      run: python main.py
+      env:
+        JIRA_SERVER: ${{ secrets.JIRA_SERVER }}
+        JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+        JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY }}
+        CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }} 
