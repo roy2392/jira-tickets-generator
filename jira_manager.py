@@ -100,6 +100,50 @@ class JiraManager:
             
         return issue
 
+    def add_comment(self, issue_key, comment):
+        """Add a comment to an issue"""
+        try:
+            self.jira.add_comment(issue_key, comment)
+        except Exception as e:
+            print(f"Warning: Could not add comment to {issue_key} - {str(e)}")
+
+    def add_worklog(self, issue_key, time_spent):
+        """Add a worklog entry to an issue"""
+        try:
+            self.jira.add_worklog(issue_key, timeSpent=time_spent)
+        except Exception as e:
+            print(f"Warning: Could not add worklog to {issue_key} - {str(e)}")
+
+    def transition_issue(self, issue_key, to_status):
+        """Transition an issue to a new status"""
+        try:
+            issue = self.jira.issue(issue_key)
+            transitions = self.jira.transitions(issue)
+            
+            # Find the transition that matches our target status
+            transition_id = None
+            for t in transitions:
+                if to_status.lower() in t['name'].lower():
+                    transition_id = t['id']
+                    break
+                    
+            if transition_id:
+                self.jira.transition_issue(issue, transition_id)
+            else:
+                print(f"Warning: Could not find transition to {to_status} for {issue_key}")
+                
+        except Exception as e:
+            print(f"Warning: Could not transition {issue_key} - {str(e)}")
+
+    def add_label(self, issue_key, label):
+        """Add a label to an issue"""
+        try:
+            issue = self.jira.issue(issue_key)
+            issue.fields.labels.append(label)
+            issue.update(fields={"labels": issue.fields.labels})
+        except Exception as e:
+            print(f"Warning: Could not add label to {issue_key} - {str(e)}")
+
     def _get_scrum_board_id(self):
         """Get the first Scrum board ID for the project"""
         boards = self.jira.boards(projectKeyOrID=self.project_key, type='scrum')
