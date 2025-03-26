@@ -1,17 +1,15 @@
 import random
 from datetime import datetime, timedelta
 import json
+import time
+import os
 
 class TicketSimulator:
-    def __init__(self, jira_manager):
-        self.jira = jira_manager
-        self.team_members = [
-            {"name": "John Smith", "role": "Developer", "velocity": 0.8},
-            {"name": "Alice Johnson", "role": "Developer", "velocity": 1.0},
-            {"name": "Bob Wilson", "role": "Developer", "velocity": 0.9},
-            {"name": "Sarah Davis", "role": "QA", "velocity": 0.85},
-            {"name": "Mike Brown", "role": "Tech Lead", "velocity": 0.7}
-        ]
+    def __init__(self, jira, tickets):
+        self.jira = jira
+        self.tickets = tickets
+        # Get the authenticated user's email
+        self.team_members = [os.getenv('JIRA_EMAIL')]
         
         self.status_transitions = [
             "To Do",
@@ -31,29 +29,61 @@ class TicketSimulator:
             "Security review pending"
         ]
         
-    def simulate_work(self, ticket_key, assignee=None, include_blockers=True):
-        """Simulate work on a ticket by transitioning it through various states"""
-        if not assignee:
-            assignee = random.choice(self.team_members)
-            
-        # 20% chance of a ticket being blocked
-        is_blocked = include_blockers and random.random() < 0.2
+    def simulate_work(self):
+        """Simulate work on tickets"""
+        print("\nSimulating work on tickets...")
+        work_chance = int(os.getenv('INPUT_WORK_CHANCE', 70)) / 100
         
-        if is_blocked:
-            blocker = random.choice(self.common_blockers)
-            self._add_blocker_comment(ticket_key, blocker)
-            return
+        for ticket in self.tickets:
+            # Skip some tickets to simulate incomplete work
+            if random.random() < work_chance:
+                self.simulate_ticket_progress(ticket)
+                # Add small delay to make transitions more realistic
+                time.sleep(0.5)
+
+    def simulate_ticket_progress(self, ticket):
+        """Simulate progress on a single ticket"""
+        try:
+            # Assign to the authenticated user
+            assignee = self.team_members[0]
+            self.jira.assign_issue(ticket.key, assignee)
             
-        # Simulate progress through states
-        current_status = "To Do"
-        for next_status in self.status_transitions[1:]:
-            # 85% chance of moving to next state
-            if random.random() < 0.85:
-                self._transition_ticket(ticket_key, current_status, next_status, assignee)
-                current_status = next_status
+            # Add work log
+            self.jira.add_worklog(
+                ticket.key,
+                timeSpentSeconds=random.randint(3600, 28800),  # 1-8 hours
+                comment=f"Working on implementing the requested changes."
+            )
+            
+            # Try to transition through different states
+            transitions = self.jira.transitions(ticket.key)
+            transition_ids = {t['name'].lower(): t['id'] for t in transitions}
+            
+            # Try common transition names
+            for status in ['in progress', 'in review', 'qa', 'done']:
+                if status in transition_ids:
+                    try:
+                        self.jira.transition_issue(ticket.key, transition_ids[status])
+                        print(f"Moved {ticket.key} to {status.upper()}")
+                    except Exception as e:
+                        print(f"Warning: Could not find transition to {status.upper()} for {ticket.key}")
+            
+            # Add comments
+            block_chance = int(os.getenv('INPUT_BLOCK_CHANCE', 30)) / 100
+            if random.random() < block_chance:
+                self.jira.add_comment(
+                    ticket.key,
+                    "Blocked: Waiting for dependency to be resolved."
+                )
             else:
-                break
+                self.jira.add_comment(
+                    ticket.key,
+                    "Implementation completed, ready for review."
+                )
                 
+        except Exception as e:
+            print(f"Error simulating work on {ticket.key}: {str(e)}")
+        
     def create_incomplete_ticket(self, epic_key=None, sprint_id=None):
         """Create a ticket with missing or incomplete information"""
         issues = [

@@ -5,102 +5,91 @@ from jira_manager import JiraManager
 from ticket_simulator import TicketSimulator
 import random
 import time
+from jira import JIRA
+
+def create_scrum_board(jira, project_key):
+    # Check if board already exists
+    boards = jira.boards()
+    for board in boards:
+        if board.name == f"{project_key} Scrum Board":
+            print(f"Board {board.name} already exists with id {board.id}")
+            return board.id
+
+    # Create JQL for the board filter
+    jql = f"project = {project_key} ORDER BY Rank ASC"
+    
+    # Create a filter for the board
+    filter_name = f"{project_key} Board Filter"
+    filter_config = {
+        'name': filter_name,
+        'description': f'Filter for {project_key} Scrum Board',
+        'jql': jql,
+        'favourite': True
+    }
+    
+    try:
+        # Create filter first
+        new_filter = jira.create_filter(**filter_config)
+        
+        # Create board using REST API
+        board_config = {
+            'name': f"{project_key} Scrum Board",
+            'type': 'scrum',
+            'filterId': new_filter.id
+        }
+        
+        # Use the REST API directly
+        url = f"{jira.server_url}/rest/agile/1.0/board"
+        response = jira._session.post(url, json=board_config)
+        
+        if response.status_code == 201:
+            new_board = response.json()
+            print(f"Created new Scrum board: {new_board['name']} with id {new_board['id']}")
+            return new_board['id']
+        else:
+            print(f"Failed to create board. Status: {response.status_code}, Response: {response.text}")
+            return None
+            
+    except Exception as e:
+        print(f"Error creating board: {str(e)}")
+        return None
 
 def main():
     # Load environment variables
     load_dotenv()
     
-    # Get configuration from GitHub Actions inputs or use defaults
-    num_sprints = int(os.getenv('INPUT_NUM_SPRINTS', '2'))
-    max_tickets_per_sprint = int(os.getenv('INPUT_TICKETS_PER_SPRINT', '5'))
+    # Initialize Jira client
+    jira = JIRA(
+        server=os.getenv('JIRA_SERVER'),
+        basic_auth=(os.getenv('JIRA_EMAIL'), os.getenv('JIRA_API_TOKEN'))
+    )
     
-    # Initialize our classes
-    ticket_gen = TicketGenerator()
-    jira = JiraManager()
-    simulator = TicketSimulator(jira)
+    project_key = os.getenv('JIRA_PROJECT_KEY')
     
-    try:
-        # 1. Create an Epic
-        print("Generating Epic...")
-        epic_data = ticket_gen.generate_epic()
-        epic = jira.create_epic(epic_data)
-        print(f"Created Epic: {epic.key}")
+    # Create Scrum board first
+    board_id = create_scrum_board(jira, project_key)
+    if not board_id:
+        print("Failed to create or find Scrum board. Exiting.")
+        return
+
+    # Generate tickets
+    ticket_generator = TicketGenerator(jira, project_key)
+    epic = ticket_generator.create_epic()
+    
+    if epic:
+        # Create sprints first
+        sprints = ticket_generator.create_sprints(board_id)
         
-        # 2. Create Sprints
-        print("\nGenerating Sprints...")
-        sprints_data = ticket_gen.generate_sprint_data(num_sprints=num_sprints)
-        created_sprints = []
-        for sprint_data in sprints_data:
-            sprint = jira.create_sprint(sprint_data)
-            if sprint:
-                created_sprints.append(sprint)
-                print(f"Created Sprint: {sprint.name}")
+        # Generate tickets and assign to sprints
+        tickets = ticket_generator.generate_tickets(epic.key, sprints)
         
-        # 3. Create Tickets
-        print("\nGenerating Tickets...")
-        created_tickets = []
-        ticket_types = ["Story", "Task", "Bug"]
+        # Simulate work on tickets
+        simulator = TicketSimulator(jira, tickets)
+        simulator.simulate_work()
         
-        if created_sprints:
-            # If we have sprints, create tickets in sprints
-            for sprint in created_sprints:
-                # Regular tickets
-                num_tickets = random.randint(3, max_tickets_per_sprint)
-                for _ in range(num_tickets):
-                    ticket_type = random.choice(ticket_types)
-                    ticket_data = ticket_gen.generate_ticket_content(ticket_type)
-                    ticket = jira.create_ticket(
-                        ticket_data,
-                        epic_key=epic.key,
-                        sprint_id=sprint.id
-                    )
-                    created_tickets.append(ticket)
-                    print(f"Created {ticket_type}: {ticket.key}")
-                
-                # Add 1-2 incomplete tickets per sprint
-                num_incomplete = random.randint(1, 2)
-                for _ in range(num_incomplete):
-                    ticket = simulator.create_incomplete_ticket(
-                        epic_key=epic.key,
-                        sprint_id=sprint.id
-                    )
-                    created_tickets.append(ticket)
-                    print(f"Created Incomplete Ticket: {ticket.key}")
-        else:
-            # If no sprints, just create tickets under the epic
-            # Regular tickets
-            num_tickets = random.randint(6, max_tickets_per_sprint * 2)
-            for _ in range(num_tickets):
-                ticket_type = random.choice(ticket_types)
-                ticket_data = ticket_gen.generate_ticket_content(ticket_type)
-                ticket = jira.create_ticket(
-                    ticket_data,
-                    epic_key=epic.key
-                )
-                created_tickets.append(ticket)
-                print(f"Created {ticket_type}: {ticket.key}")
-            
-            # Add 2-3 incomplete tickets
-            num_incomplete = random.randint(2, 3)
-            for _ in range(num_incomplete):
-                ticket = simulator.create_incomplete_ticket(epic_key=epic.key)
-                created_tickets.append(ticket)
-                print(f"Created Incomplete Ticket: {ticket.key}")
-        
-        # 4. Simulate work on tickets
-        print("\nSimulating work on tickets...")
-        for ticket in created_tickets:
-            # Skip some tickets to simulate incomplete work
-            if random.random() < 0.7:  # 70% chance of working on a ticket
-                simulator.simulate_work(ticket.key)
-                # Add small delay to make transitions more realistic
-                time.sleep(0.5)
-                
         print("\nSimulation completed successfully!")
-        
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
-        raise  # Re-raise the exception to fail the GitHub Action
+    else:
+        print("Failed to create epic. Simulation aborted.")
 
 if __name__ == "__main__":
     main() 
