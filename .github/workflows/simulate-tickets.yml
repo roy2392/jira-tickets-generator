@@ -3,102 +3,66 @@ name: Simulate Jira Tickets
 on:
   workflow_dispatch:
     inputs:
-      num_sprints:
-        description: 'Number of sprints to create'
+      sprint_config:
+        description: 'Sprint configuration (format: num_sprints,tickets_per_sprint,incomplete_tickets_per_sprint,sprint_length_days)'
         required: true
-        default: '2'
-        type: number
-      tickets_per_sprint:
-        description: 'Maximum number of tickets per sprint'
-        required: true
-        default: '5'
-        type: number
-      incomplete_tickets_per_sprint:
-        description: 'Number of incomplete tickets per sprint (1-2)'
-        required: true
-        default: '1'
-        type: number
-      work_chance:
-        description: 'Chance of working on a ticket (0-100)'
-        required: true
-        default: '70'
-        type: number
-      block_chance:
-        description: 'Chance of a ticket being blocked (0-100)'
-        required: true
-        default: '30'
-        type: number
-      sprint_length_days:
-        description: 'Length of each sprint in days'
-        required: true
-        default: '14'
-        type: number
-      ticket_types:
-        description: 'Types of tickets to create (comma-separated)'
-        required: true
-        default: 'Story,Task,Bug'
+        default: '2,5,1,14'
         type: string
-      num_developers:
-        description: 'Number of developers in the team'
+      ticket_config:
+        description: 'Ticket configuration (format: work_chance,block_chance,ticket_types)'
         required: true
-        default: '4'
-        type: number
-      num_qa:
-        description: 'Number of QA engineers in the team'
+        default: '70,30,Story,Task,Bug'
+        type: string
+      team_config:
+        description: 'Team configuration (format: devs,qa,tech_leads,po,sm)'
         required: true
-        default: '2'
-        type: number
-      num_tech_leads:
-        description: 'Number of tech leads in the team'
-        required: true
-        default: '1'
-        type: number
-      num_product_owners:
-        description: 'Number of product owners in the team'
-        required: true
-        default: '1'
-        type: number
-      num_scrum_masters:
-        description: 'Number of scrum masters in the team'
-        required: true
-        default: '1'
-        type: number
+        default: '4,2,1,1,1'
+        type: string
 
 jobs:
   simulate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v2
       
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v2
         with:
           python-version: '3.12'
           
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install python-dotenv jira anthropic faker python-dateutil
+          pip install -r requirements.txt
           
       - name: Create .env file
         run: |
-          echo "JIRA_SERVER=${{ secrets.JIRA_SERVER }}" >> .env
+          # Parse sprint config
+          IFS=',' read -r NUM_SPRINTS TICKETS_PER_SPRINT INCOMPLETE_TICKETS SPRINT_LENGTH <<< "${{ inputs.sprint_config }}"
+          
+          # Parse ticket config
+          IFS=',' read -r WORK_CHANCE BLOCK_CHANCE TICKET_TYPES <<< "${{ inputs.ticket_config }}"
+          
+          # Parse team config
+          IFS=',' read -r NUM_DEVS NUM_QA NUM_LEADS NUM_PO NUM_SM <<< "${{ inputs.team_config }}"
+          
+          echo "JIRA_SERVER=${{ secrets.JIRA_SERVER }}" > .env
           echo "JIRA_EMAIL=${{ secrets.JIRA_EMAIL }}" >> .env
           echo "JIRA_API_TOKEN=${{ secrets.JIRA_API_TOKEN }}" >> .env
           echo "JIRA_PROJECT_KEY=${{ secrets.JIRA_PROJECT_KEY }}" >> .env
           echo "CLAUDE_API_KEY=${{ secrets.CLAUDE_API_KEY }}" >> .env
-          echo "INPUT_NUM_SPRINTS=${{ github.event.inputs.num_sprints }}" >> .env
-          echo "INPUT_TICKETS_PER_SPRINT=${{ github.event.inputs.tickets_per_sprint }}" >> .env
-          echo "INPUT_INCOMPLETE_TICKETS_PER_SPRINT=${{ github.event.inputs.incomplete_tickets_per_sprint }}" >> .env
-          echo "INPUT_WORK_CHANCE=${{ github.event.inputs.work_chance }}" >> .env
-          echo "INPUT_BLOCK_CHANCE=${{ github.event.inputs.block_chance }}" >> .env
-          echo "INPUT_SPRINT_LENGTH_DAYS=${{ github.event.inputs.sprint_length_days }}" >> .env
-          echo "INPUT_TICKET_TYPES=${{ github.event.inputs.ticket_types }}" >> .env
-          echo "INPUT_NUM_DEVELOPERS=${{ github.event.inputs.num_developers }}" >> .env
-          echo "INPUT_NUM_QA=${{ github.event.inputs.num_qa }}" >> .env
-          echo "INPUT_NUM_TECH_LEADS=${{ github.event.inputs.num_tech_leads }}" >> .env
-          echo "INPUT_NUM_PRODUCT_OWNERS=${{ github.event.inputs.num_product_owners }}" >> .env
-          echo "INPUT_NUM_SCRUM_MASTERS=${{ github.event.inputs.num_scrum_masters }}" >> .env
+          echo "INPUT_NUM_SPRINTS=$NUM_SPRINTS" >> .env
+          echo "INPUT_TICKETS_PER_SPRINT=$TICKETS_PER_SPRINT" >> .env
+          echo "INPUT_INCOMPLETE_TICKETS_PER_SPRINT=$INCOMPLETE_TICKETS" >> .env
+          echo "INPUT_WORK_CHANCE=$WORK_CHANCE" >> .env
+          echo "INPUT_BLOCK_CHANCE=$BLOCK_CHANCE" >> .env
+          echo "INPUT_SPRINT_LENGTH_DAYS=$SPRINT_LENGTH" >> .env
+          echo "INPUT_TICKET_TYPES=$TICKET_TYPES" >> .env
+          echo "INPUT_NUM_DEVELOPERS=$NUM_DEVS" >> .env
+          echo "INPUT_NUM_QA=$NUM_QA" >> .env
+          echo "INPUT_NUM_TECH_LEADS=$NUM_LEADS" >> .env
+          echo "INPUT_NUM_PRODUCT_OWNERS=$NUM_PO" >> .env
+          echo "INPUT_NUM_SCRUM_MASTERS=$NUM_SM" >> .env
           
       - name: Run simulation
         run: python main.py 

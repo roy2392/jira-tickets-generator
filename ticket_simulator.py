@@ -31,10 +31,10 @@ class TicketSimulator:
         ]
         
     def create_or_get_team_members(self):
-        """Create or get existing team members"""
+        """Create or get team members for the simulation."""
         team_members = []
         
-        # Define team roles and number of members per role from environment variables
+        # Define team structure based on environment variables
         team_structure = {
             'Developer': int(os.getenv('INPUT_NUM_DEVELOPERS', 4)),
             'QA Engineer': int(os.getenv('INPUT_NUM_QA', 2)),
@@ -43,114 +43,175 @@ class TicketSimulator:
             'Scrum Master': int(os.getenv('INPUT_NUM_SCRUM_MASTERS', 1))
         }
         
+        fake = Faker()
+        
         try:
-            # Get all users in Jira
-            existing_users = self.jira._get_json('user/search', params={'query': '@'})
-            existing_emails = {user['emailAddress'] for user in existing_users if 'emailAddress' in user}
+            # Get all existing users first
+            existing_users = self.jira.search_users(query='')
+            existing_emails = {user.emailAddress for user in existing_users}
             
             # Create users for each role
             for role, count in team_structure.items():
-                for i in range(count):
-                    first_name = self.fake.first_name()
-                    last_name = self.fake.last_name()
+                for _ in range(count):
+                    first_name = fake.first_name()
+                    last_name = fake.last_name()
                     email = f"{first_name.lower()}.{last_name.lower()}@example.com"
                     
                     # Skip if user already exists
                     if email in existing_emails:
-                        team_members.append(email)
                         continue
                     
-                    # Create new user
                     try:
+                        # Create user with product access
                         user_data = {
                             'displayName': f"{first_name} {last_name}",
                             'emailAddress': email,
-                            'name': email.split('@')[0],
-                            'password': self.fake.password(),
-                            'notification': 'DONT_NOTIFY'
+                            'name': email,  # Using email as username
+                            'password': fake.password(),
+                            'notification': 'DONT_NOTIFY',
+                            'applicationKeys': ['jira-software']  # Specify Jira Software access
                         }
                         
-                        # Try to create user using admin API
-                        response = self.jira._session.post(
+                        new_user = self.jira._session.post(
                             f"{self.jira.server_url}/rest/api/2/user",
                             json=user_data
                         )
                         
-                        if response.status_code in [201, 400]:  # 400 means user might already exist
-                            team_members.append(email)
-                            print(f"Added team member: {email} ({role})")
+                        if new_user.status_code == 201:
+                            team_members.append({
+                                'email': email,
+                                'role': role
+                            })
+                        else:
+                            print(f"Warning: Could not create user {email}: {new_user.text}")
                     except Exception as e:
                         print(f"Warning: Could not create user {email}: {str(e)}")
             
-            # If we couldn't create any users, fall back to the authenticated user
             if not team_members:
-                team_members = [os.getenv('JIRA_EMAIL')]
-                print("Warning: Using authenticated user as fallback")
+                print("\nWarning: Using authenticated user as fallback")
+                # Get the current user's email
+                myself = self.jira.myself()
+                team_members.append({
+                    'email': myself['emailAddress'],
+                    'role': 'Developer'  # Default role
+                })
             
             return team_members
-            
+        
         except Exception as e:
-            print(f"Warning: Could not create team members: {str(e)}")
-            # Fall back to authenticated user
-            return [os.getenv('JIRA_EMAIL')]
+            print(f"Error creating team members: {str(e)}")
+            print("Using authenticated user as fallback")
+            # Get the current user's email
+            myself = self.jira.myself()
+            return [{
+                'email': myself['emailAddress'],
+                'role': 'Developer'  # Default role
+            }]
 
     def simulate_work(self):
-        """Simulate work on tickets"""
-        print("\nSimulating work on tickets...")
-        work_chance = int(os.getenv('INPUT_WORK_CHANCE', 70)) / 100
+        """Simulate work being done on tickets."""
+        # Get all transitions
+        transitions = {
+            'To Do': 'Open',
+            'In Progress': 'Start Progress',
+            'In Review': 'Review',
+            'QA': 'QA Review',
+            'Done': 'Done'
+        }
         
+        # Create team members if not already created
+        if not hasattr(self, 'team_members'):
+            self.team_members = self.create_or_get_team_members()
+        
+        if not self.team_members:
+            print("Error: No team members available for simulation")
+            return
+        
+        # Process each ticket
         for ticket in self.tickets:
-            # Skip some tickets to simulate incomplete work
-            if random.random() < work_chance:
-                self.simulate_ticket_progress(ticket)
-                # Add small delay to make transitions more realistic
-                time.sleep(0.5)
-
-    def simulate_ticket_progress(self, ticket):
-        """Simulate progress on a single ticket"""
-        try:
-            # Assign to random team member
-            assignee = random.choice(self.team_members)
-            self.jira.assign_issue(ticket.key, assignee)
-            
-            # Add work log with assignee's name
-            self.jira.add_worklog(
-                ticket.key,
-                timeSpentSeconds=random.randint(3600, 28800),  # 1-8 hours
-                comment=f"{assignee.split('@')[0]} working on implementing the requested changes."
-            )
-            
-            # Try to transition through different states
-            transitions = self.jira.transitions(ticket.key)
-            transition_ids = {t['name'].lower(): t['id'] for t in transitions}
-            
-            # Try common transition names
-            for status in ['in progress', 'in review', 'qa', 'done']:
-                if status in transition_ids:
-                    try:
-                        self.jira.transition_issue(ticket.key, transition_ids[status])
-                        print(f"Moved {ticket.key} to {status.upper()} (Assignee: {assignee})")
-                    except Exception as e:
-                        print(f"Warning: Could not find transition to {status.upper()} for {ticket.key}")
-            
-            # Add comments
-            block_chance = int(os.getenv('INPUT_BLOCK_CHANCE', 30)) / 100
-            if random.random() < block_chance:
-                blocker = random.choice(self.team_members)
-                self.jira.add_comment(
+            try:
+                # Get available transitions for this ticket
+                available_transitions = self.jira.transitions(ticket.key)
+                transition_ids = {t['name']: t['id'] for t in available_transitions}
+                
+                # Assign to random team member
+                assignee = random.choice(self.team_members)
+                self.jira.assign_issue(ticket.key, assignee['email'])
+                
+                # Add work log with assignee's name
+                self.jira.add_worklog(
                     ticket.key,
-                    f"Blocked: {blocker.split('@')[0]} needs to complete dependent work first."
-                )
-            else:
-                reviewer = random.choice([m for m in self.team_members if m != assignee])
-                self.jira.add_comment(
-                    ticket.key,
-                    f"Implementation completed by {assignee.split('@')[0]}, requesting review from {reviewer.split('@')[0]}."
+                    timeSpentSeconds=random.randint(3600, 28800),  # 1-8 hours
+                    comment=f"{assignee['email'].split('@')[0]} working on implementing the requested changes."
                 )
                 
-        except Exception as e:
-            print(f"Error simulating work on {ticket.key}: {str(e)}")
+                # Move through workflow states
+                for status in ['In Progress', 'Done']:
+                    if status in transition_ids:
+                        try:
+                            self.jira.transition_issue(ticket.key, transition_ids[status])
+                            print(f"Moved {ticket.key} to {status.upper()} (Assignee: {assignee['email']})")
+                        except Exception as e:
+                            print(f"Warning: Could not find transition to {status.upper()} for {ticket.key}")
+                            continue
+                        
+                        # Add comments based on status
+                        comment = self._get_status_comment(status, assignee)
+                        self.jira.add_comment(ticket.key, comment)
+                        
+                        # Simulate work time
+                        time.sleep(0.5)  # Small delay to prevent rate limiting
+                        
+                        # Randomly decide if ticket gets blocked
+                        if status == 'In Progress' and random.randint(1, 100) <= int(os.getenv('INPUT_BLOCK_CHANCE', 30)):
+                            # Choose a random team member as blocker (not the assignee)
+                            other_members = [m for m in self.team_members if m['email'] != assignee['email']]
+                            if other_members:  # Only add blocker if there are other team members
+                                blocker = random.choice(other_members)
+                                self.jira.add_comment(
+                                    ticket.key,
+                                    f"Blocked: {blocker['email'].split('@')[0]} needs to complete dependent work first."
+                                )
+                        else:
+                            # Add code review comment
+                            other_members = [m for m in self.team_members if m['email'] != assignee['email']]
+                            if other_members:  # Only add review comment if there are other team members
+                                reviewer = random.choice(other_members)
+                                self.jira.add_comment(
+                                    ticket.key,
+                                    f"Implementation completed by {assignee['email'].split('@')[0]}, requesting review from {reviewer['email'].split('@')[0]}."
+                                )
+            except Exception as e:
+                print(f"Error simulating work on {ticket.key}: {str(e)}")
+                continue
+
+    def _get_status_comment(self, status, assignee):
+        """Get a random comment for the given status."""
+        comments = {
+            "In Progress": [
+                f"Starting work on this ticket. - {assignee['email'].split('@')[0]}",
+                f"Beginning implementation. Will update with progress. - {assignee['email'].split('@')[0]}",
+                f"Taking this one. - {assignee['email'].split('@')[0]}"
+            ],
+            "In Review": [
+                f"Ready for code review. Main changes:\n- Implementation complete\n- Added unit tests\n- Updated documentation - {assignee['email'].split('@')[0]}",
+                f"Completed implementation. Please review. - {assignee['email'].split('@')[0]}",
+                f"PR created and ready for review. - {assignee['email'].split('@')[0]}"
+            ],
+            "QA": [
+                f"Moving to QA. Test cases added in the description. - {assignee['email'].split('@')[0]}",
+                f"Ready for testing. All automated tests passing. - {assignee['email'].split('@')[0]}",
+                f"Implementation complete and verified in dev environment. Ready for QA. - {assignee['email'].split('@')[0]}"
+            ],
+            "Done": [
+                f"All acceptance criteria met and verified. - {assignee['email'].split('@')[0]}",
+                f"Completed and verified in staging environment. - {assignee['email'].split('@')[0]}",
+                f"Ready for production deployment. - {assignee['email'].split('@')[0]}"
+            ]
+        }
         
+        return random.choice(comments.get(status, [f"Moving to {status} - {assignee['email'].split('@')[0]}"]))
+
     def create_incomplete_ticket(self, epic_key=None, sprint_id=None):
         """Create a ticket with missing or incomplete information"""
         issues = [
@@ -203,25 +264,25 @@ class TicketSimulator:
         """Generate a realistic comment for the status transition"""
         comments = {
             "In Progress": [
-                f"Starting work on this ticket. - {assignee['name']}",
-                f"Beginning implementation. Will update with progress. - {assignee['name']}",
-                f"Taking this one. - {assignee['name']}"
+                f"Starting work on this ticket. - {assignee['email'].split('@')[0]}",
+                f"Beginning implementation. Will update with progress. - {assignee['email'].split('@')[0]}",
+                f"Taking this one. - {assignee['email'].split('@')[0]}"
             ],
             "In Review": [
-                f"Ready for code review. Main changes:\n- Implementation complete\n- Added unit tests\n- Updated documentation - {assignee['name']}",
-                f"Completed implementation. Please review. - {assignee['name']}",
-                f"PR created and ready for review. - {assignee['name']}"
+                f"Ready for code review. Main changes:\n- Implementation complete\n- Added unit tests\n- Updated documentation - {assignee['email'].split('@')[0]}",
+                f"Completed implementation. Please review. - {assignee['email'].split('@')[0]}",
+                f"PR created and ready for review. - {assignee['email'].split('@')[0]}"
             ],
             "QA": [
-                f"Moving to QA. Test cases added in the description. - {assignee['name']}",
-                f"Ready for testing. All automated tests passing. - {assignee['name']}",
-                f"Implementation complete and verified in dev environment. Ready for QA. - {assignee['name']}"
+                f"Moving to QA. Test cases added in the description. - {assignee['email'].split('@')[0]}",
+                f"Ready for testing. All automated tests passing. - {assignee['email'].split('@')[0]}",
+                f"Implementation complete and verified in dev environment. Ready for QA. - {assignee['email'].split('@')[0]}"
             ],
             "Done": [
-                f"All acceptance criteria met and verified. - {assignee['name']}",
-                f"Completed and verified in staging environment. - {assignee['name']}",
-                f"Ready for production deployment. - {assignee['name']}"
+                f"All acceptance criteria met and verified. - {assignee['email'].split('@')[0]}",
+                f"Completed and verified in staging environment. - {assignee['email'].split('@')[0]}",
+                f"Ready for production deployment. - {assignee['email'].split('@')[0]}"
             ]
         }
         
-        return random.choice(comments.get(status, [f"Moving to {status} - {assignee['name']}"])) 
+        return random.choice(comments.get(status, [f"Moving to {status} - {assignee['email'].split('@')[0]}"])) 
