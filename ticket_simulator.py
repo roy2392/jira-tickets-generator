@@ -3,13 +3,14 @@ from datetime import datetime, timedelta
 import json
 import time
 import os
+from faker import Faker
 
 class TicketSimulator:
     def __init__(self, jira, tickets):
         self.jira = jira
         self.tickets = tickets
-        # Get the authenticated user's email
-        self.team_members = [os.getenv('JIRA_EMAIL')]
+        self.fake = Faker()
+        self.team_members = self.create_or_get_team_members()
         
         self.status_transitions = [
             "To Do",
@@ -29,6 +30,70 @@ class TicketSimulator:
             "Security review pending"
         ]
         
+    def create_or_get_team_members(self):
+        """Create or get existing team members"""
+        team_members = []
+        
+        # Define team roles and number of members per role from environment variables
+        team_structure = {
+            'Developer': int(os.getenv('INPUT_NUM_DEVELOPERS', 4)),
+            'QA Engineer': int(os.getenv('INPUT_NUM_QA', 2)),
+            'Tech Lead': int(os.getenv('INPUT_NUM_TECH_LEADS', 1)),
+            'Product Owner': int(os.getenv('INPUT_NUM_PRODUCT_OWNERS', 1)),
+            'Scrum Master': int(os.getenv('INPUT_NUM_SCRUM_MASTERS', 1))
+        }
+        
+        try:
+            # Get all users in Jira
+            existing_users = self.jira._get_json('user/search', params={'query': '@'})
+            existing_emails = {user['emailAddress'] for user in existing_users if 'emailAddress' in user}
+            
+            # Create users for each role
+            for role, count in team_structure.items():
+                for i in range(count):
+                    first_name = self.fake.first_name()
+                    last_name = self.fake.last_name()
+                    email = f"{first_name.lower()}.{last_name.lower()}@example.com"
+                    
+                    # Skip if user already exists
+                    if email in existing_emails:
+                        team_members.append(email)
+                        continue
+                    
+                    # Create new user
+                    try:
+                        user_data = {
+                            'displayName': f"{first_name} {last_name}",
+                            'emailAddress': email,
+                            'name': email.split('@')[0],
+                            'password': self.fake.password(),
+                            'notification': 'DONT_NOTIFY'
+                        }
+                        
+                        # Try to create user using admin API
+                        response = self.jira._session.post(
+                            f"{self.jira.server_url}/rest/api/2/user",
+                            json=user_data
+                        )
+                        
+                        if response.status_code in [201, 400]:  # 400 means user might already exist
+                            team_members.append(email)
+                            print(f"Added team member: {email} ({role})")
+                    except Exception as e:
+                        print(f"Warning: Could not create user {email}: {str(e)}")
+            
+            # If we couldn't create any users, fall back to the authenticated user
+            if not team_members:
+                team_members = [os.getenv('JIRA_EMAIL')]
+                print("Warning: Using authenticated user as fallback")
+            
+            return team_members
+            
+        except Exception as e:
+            print(f"Warning: Could not create team members: {str(e)}")
+            # Fall back to authenticated user
+            return [os.getenv('JIRA_EMAIL')]
+
     def simulate_work(self):
         """Simulate work on tickets"""
         print("\nSimulating work on tickets...")
@@ -44,15 +109,15 @@ class TicketSimulator:
     def simulate_ticket_progress(self, ticket):
         """Simulate progress on a single ticket"""
         try:
-            # Assign to the authenticated user
-            assignee = self.team_members[0]
+            # Assign to random team member
+            assignee = random.choice(self.team_members)
             self.jira.assign_issue(ticket.key, assignee)
             
-            # Add work log
+            # Add work log with assignee's name
             self.jira.add_worklog(
                 ticket.key,
                 timeSpentSeconds=random.randint(3600, 28800),  # 1-8 hours
-                comment=f"Working on implementing the requested changes."
+                comment=f"{assignee.split('@')[0]} working on implementing the requested changes."
             )
             
             # Try to transition through different states
@@ -64,21 +129,23 @@ class TicketSimulator:
                 if status in transition_ids:
                     try:
                         self.jira.transition_issue(ticket.key, transition_ids[status])
-                        print(f"Moved {ticket.key} to {status.upper()}")
+                        print(f"Moved {ticket.key} to {status.upper()} (Assignee: {assignee})")
                     except Exception as e:
                         print(f"Warning: Could not find transition to {status.upper()} for {ticket.key}")
             
             # Add comments
             block_chance = int(os.getenv('INPUT_BLOCK_CHANCE', 30)) / 100
             if random.random() < block_chance:
+                blocker = random.choice(self.team_members)
                 self.jira.add_comment(
                     ticket.key,
-                    "Blocked: Waiting for dependency to be resolved."
+                    f"Blocked: {blocker.split('@')[0]} needs to complete dependent work first."
                 )
             else:
+                reviewer = random.choice([m for m in self.team_members if m != assignee])
                 self.jira.add_comment(
                     ticket.key,
-                    "Implementation completed, ready for review."
+                    f"Implementation completed by {assignee.split('@')[0]}, requesting review from {reviewer.split('@')[0]}."
                 )
                 
         except Exception as e:

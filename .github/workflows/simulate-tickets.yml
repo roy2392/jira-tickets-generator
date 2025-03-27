@@ -38,6 +38,31 @@ on:
         required: true
         default: 'Story,Task,Bug'
         type: string
+      num_developers:
+        description: 'Number of developers in the team'
+        required: true
+        default: '4'
+        type: number
+      num_qa:
+        description: 'Number of QA engineers in the team'
+        required: true
+        default: '2'
+        type: number
+      num_tech_leads:
+        description: 'Number of tech leads in the team'
+        required: true
+        default: '1'
+        type: number
+      num_product_owners:
+        description: 'Number of product owners in the team'
+        required: true
+        default: '1'
+        type: number
+      num_scrum_masters:
+        description: 'Number of scrum masters in the team'
+        required: true
+        default: '1'
+        type: number
 
 jobs:
   simulate:
@@ -69,6 +94,11 @@ jobs:
           echo "INPUT_BLOCK_CHANCE=${{ github.event.inputs.block_chance }}" >> .env
           echo "INPUT_SPRINT_LENGTH_DAYS=${{ github.event.inputs.sprint_length_days }}" >> .env
           echo "INPUT_TICKET_TYPES=${{ github.event.inputs.ticket_types }}" >> .env
+          echo "INPUT_NUM_DEVELOPERS=${{ github.event.inputs.num_developers }}" >> .env
+          echo "INPUT_NUM_QA=${{ github.event.inputs.num_qa }}" >> .env
+          echo "INPUT_NUM_TECH_LEADS=${{ github.event.inputs.num_tech_leads }}" >> .env
+          echo "INPUT_NUM_PRODUCT_OWNERS=${{ github.event.inputs.num_product_owners }}" >> .env
+          echo "INPUT_NUM_SCRUM_MASTERS=${{ github.event.inputs.num_scrum_masters }}" >> .env
           
       - name: Run simulation
         run: python main.py 
